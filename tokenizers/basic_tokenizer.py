@@ -23,15 +23,19 @@ class BasicTokenizer:
             FileNotFoundError: If no vocabulary file exists at the resolved path.
         """
         vocabulary_path = (
-            Path(__file__).resolve().parent
+            Path(__file__).resolve().parent.parent
             / BasicTokenizer.VOCABULARIES_DIRECTORY_NAME
             / vocabulary_file_name
         )
         try:
             with open(vocabulary_path, "rb") as file:
                 vocabulary = pickle.load(file)
-                self.encode_vocabulary = vocabulary[BasicTokenizer.ENCODE_VOCABULARY_KEY]
-                self.decode_vocabulary = vocabulary[BasicTokenizer.DECODE_VOCABULARY_KEY]
+                self.encode_vocabulary = vocabulary[
+                    BasicTokenizer.ENCODE_VOCABULARY_KEY
+                ]
+                self.decode_vocabulary = vocabulary[
+                    BasicTokenizer.DECODE_VOCABULARY_KEY
+                ]
         except FileNotFoundError:
             raise FileNotFoundError(
                 f"Vocabulary file not found: {vocabulary_path}"
@@ -96,19 +100,58 @@ class BasicTokenizer:
         """
         decoded_tokens = []
         for token_id in tokens:
-            if token_id < BasicTokenizer.BASE_VOCABULARY_SIZE:
-                # Raw token value - nothing to expand.
-                decoded_tokens.append(token_id)
-            else:
-                try:
-                    # Maps a merged token id to the full raw-byte sequence it expands to.
-                    decoded_tokens.extend(self.decode_vocabulary[token_id])
-                except KeyError:
-                    raise KeyError(f"Unknown token id: {token_id}") from None
+            decoded_tokens.extend(self._expand_token(token_id))
         # A subset of tokens (e.g. from a partial/invalid sequence) may not align to
         # valid UTF-8 - substitute the U+FFFD replacement character instead of raising.
-        text = bytes(decoded_tokens).decode(BasicTokenizer.TEXT_ENCODING, errors="replace")
+        text = bytes(decoded_tokens).decode(
+            BasicTokenizer.TEXT_ENCODING, errors="replace"
+        )
         return text
+
+    def decode_as_list(self, tokens: list[int]) -> list[str]:
+        """Decode each token id individually into its own textual representation.
+
+        Unlike `decode`, which concatenates all raw bytes before decoding,
+        each token is decoded on its own - useful for inspecting what
+        individual tokens in a sequence represent.
+
+        Args:
+            tokens: A sequence of token ids, using this tokenizer's vocabulary.
+
+        Returns:
+            A list of strings, one per input token id, with any invalid UTF-8
+            byte sequences replaced.
+
+        Raises:
+            KeyError: If `tokens` contains an id not present in this tokenizer's vocabulary.
+        """
+        return [
+            bytes(self._expand_token(token_id)).decode(
+                BasicTokenizer.TEXT_ENCODING, errors="replace"
+            )
+            for token_id in tokens
+        ]
+
+    def _expand_token(self, token_id: int) -> list[int]:
+        """Expand a single token id into the raw byte values it represents.
+
+        Args:
+            token_id: A single token id, using this tokenizer's vocabulary.
+
+        Returns:
+            The list of raw byte values (0-255) that `token_id` expands to.
+
+        Raises:
+            KeyError: If `token_id` is not present in this tokenizer's vocabulary.
+        """
+        if token_id < BasicTokenizer.BASE_VOCABULARY_SIZE:
+            # Raw token value - nothing to expand.
+            return [token_id]
+        try:
+            # Maps a merged token id to the full raw-byte sequence it expands to.
+            return self.decode_vocabulary[token_id]
+        except KeyError:
+            raise KeyError(f"Unknown token id: {token_id}") from None
 
     @staticmethod
     def train(
@@ -143,7 +186,7 @@ class BasicTokenizer:
 
         # Checked upfront so training never runs only to fail on the save step at the very end.
         vocabulary_path = (
-            Path(__file__).resolve().parent
+            Path(__file__).resolve().parent.parent
             / BasicTokenizer.VOCABULARIES_DIRECTORY_NAME
             / vocabulary_file_name
         )
@@ -151,12 +194,14 @@ class BasicTokenizer:
             raise FileExistsError(f"Vocabulary file already exists: {vocabulary_path}")
 
         input_path = (
-            Path(__file__).resolve().parent
+            Path(__file__).resolve().parent.parent
             / BasicTokenizer.INPUTS_DIRECTORY_NAME
             / input_file_name
         )
         try:
-            with open(input_path, "r", encoding=BasicTokenizer.TEXT_ENCODING) as input_file:
+            with open(
+                input_path, "r", encoding=BasicTokenizer.TEXT_ENCODING
+            ) as input_file:
                 text = input_file.read()
         except FileNotFoundError:
             raise FileNotFoundError(f"Input file not found: {input_path}") from None
@@ -165,7 +210,7 @@ class BasicTokenizer:
         original_tokens = list(text.encode(BasicTokenizer.TEXT_ENCODING))
 
         # Work on a copy so `original_tokens` still reflects the starting length.
-        tokens = list(original_tokens)
+        tokens = original_tokens.copy()
         encode_vocabulary = {}
         decode_vocabulary = {}
         new_token_id = BasicTokenizer.BASE_VOCABULARY_SIZE
@@ -227,45 +272,6 @@ class BasicTokenizer:
         print(f"Saved the vocabulary to the path - {vocabulary_path}")
 
     @staticmethod
-    def merge_token_pairs(
-        tokens: list[int], token_pair: tuple[int, int], merged_token_id: int
-    ) -> list[int]:
-        """Replace every occurrence of `token_pair` with `merged_token_id`.
-
-        Args:
-            tokens: A sequence of integer token ids.
-            token_pair: The adjacent pair of token ids to replace wherever it occurs.
-            merged_token_id: The token id to substitute for `token_pair`.
-
-        Returns:
-            A new list of tokens with each occurrence of `token_pair` collapsed
-            into a single `merged_token_id`.
-        """
-        output_tokens = []
-
-        # Walk the tokens, replacing every occurrence of the target pair with
-        # `merged_token_id` and copying everything else through unchanged.
-        i = 0
-        while i < len(tokens):
-            # `i < len(tokens) - 1` guards against reading `tokens[i + 1]` when
-            # `i` is the last index, which would otherwise raise an IndexError
-            # if that final token happens to equal `token_pair[0]`.
-            if (
-                i < len(tokens) - 1
-                and tokens[i] == token_pair[0]
-                and tokens[i + 1] == token_pair[1]
-            ):
-                # Found the target pair - emit the merged token and skip both.
-                output_tokens.append(merged_token_id)
-                i = i + 2
-            else:
-                # No match at this position - keep the token and advance by one.
-                output_tokens.append(tokens[i])
-                i = i + 1
-
-        return output_tokens
-
-    @staticmethod
     def get_token_pair_counts(tokens: list[int]) -> dict[tuple[int, int], int]:
         """Count occurrences of each consecutive pair of tokens.
 
@@ -306,3 +312,42 @@ class BasicTokenizer:
             raise ValueError("token_pair_counts must not be empty")
         # Find the pair with the maximum count, then extract the pair tuple (skip the count value).
         return max(token_pair_counts.items(), key=lambda item: item[1])[0]
+
+    @staticmethod
+    def merge_token_pairs(
+        tokens: list[int], token_pair: tuple[int, int], merged_token_id: int
+    ) -> list[int]:
+        """Replace every occurrence of `token_pair` with `merged_token_id`.
+
+        Args:
+            tokens: A sequence of integer token ids.
+            token_pair: The adjacent pair of token ids to replace wherever it occurs.
+            merged_token_id: The token id to substitute for `token_pair`.
+
+        Returns:
+            A new list of tokens with each occurrence of `token_pair` collapsed
+            into a single `merged_token_id`.
+        """
+        output_tokens = []
+
+        # Walk the tokens, replacing every occurrence of the target pair with
+        # `merged_token_id` and copying everything else through unchanged.
+        i = 0
+        while i < len(tokens):
+            # `i < len(tokens) - 1` guards against reading `tokens[i + 1]` when
+            # `i` is the last index, which would otherwise raise an IndexError
+            # if that final token happens to equal `token_pair[0]`.
+            if (
+                i < len(tokens) - 1
+                and tokens[i] == token_pair[0]
+                and tokens[i + 1] == token_pair[1]
+            ):
+                # Found the target pair - emit the merged token and skip both.
+                output_tokens.append(merged_token_id)
+                i = i + 2
+            else:
+                # No match at this position - keep the token and advance by one.
+                output_tokens.append(tokens[i])
+                i = i + 1
+
+        return output_tokens

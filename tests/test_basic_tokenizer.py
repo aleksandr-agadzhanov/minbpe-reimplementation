@@ -3,12 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from basic_tokenizer import BasicTokenizer
+from tokenizers.basic_tokenizer import BasicTokenizer
 
 # BasicTokenizer resolves vocabularies/inputs relative to its own module file,
 # so tests that need real files on disk must use these same directories.
-REPO_ROOT = Path(__file__).resolve().parent
-INPUTS_DIR = REPO_ROOT / "inputs"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+INPUTS_DIR = REPO_ROOT / "training_datasets"
 VOCABULARIES_DIR = REPO_ROOT / "vocabularies"
 
 
@@ -55,6 +55,7 @@ def temp_vocabulary_output():
 # __init__
 # ---------------------------------------------------------------------------
 
+
 def test_init_loads_existing_vocabulary(temp_vocabulary_file):
     file_name, vocabulary = temp_vocabulary_file
 
@@ -72,6 +73,7 @@ def test_init_raises_filenotfounderror_for_missing_vocabulary():
 # ---------------------------------------------------------------------------
 # encode
 # ---------------------------------------------------------------------------
+
 
 def test_encode_applies_merges_in_learned_order():
     # Learn (a,b) -> 256 first, then (256,c) -> 257, so "abc" should fully collapse.
@@ -102,6 +104,7 @@ def test_encode_single_character_returns_single_token():
 # ---------------------------------------------------------------------------
 # decode
 # ---------------------------------------------------------------------------
+
 
 def test_decode_expands_merged_tokens():
     tokenizer = make_tokenizer({}, {256: [97, 98]})
@@ -139,8 +142,70 @@ def test_encode_decode_roundtrip():
 
 
 # ---------------------------------------------------------------------------
+# decode_as_list
+# ---------------------------------------------------------------------------
+
+
+def test_decode_as_list_expands_merged_tokens():
+    tokenizer = make_tokenizer({}, {256: [97, 98]})
+
+    assert tokenizer.decode_as_list([256, 99]) == ["ab", "c"]
+
+
+def test_decode_as_list_raw_bytes_only():
+    tokenizer = make_tokenizer({}, {})
+
+    assert tokenizer.decode_as_list([104, 105]) == ["h", "i"]
+
+
+def test_decode_as_list_raises_keyerror_for_unknown_token_id():
+    tokenizer = make_tokenizer({}, {})
+
+    with pytest.raises(KeyError):
+        tokenizer.decode_as_list([999])
+
+
+def test_decode_as_list_replaces_invalid_utf8_instead_of_raising():
+    tokenizer = make_tokenizer({}, {})
+
+    # A lone 0x80 byte is not valid UTF-8 on its own.
+    assert tokenizer.decode_as_list([0x80]) == ["\ufffd"]
+
+
+def test_decode_as_list_empty_input_returns_empty_list():
+    tokenizer = make_tokenizer({}, {})
+
+    assert tokenizer.decode_as_list([]) == []
+
+
+# ---------------------------------------------------------------------------
+# _expand_token
+# ---------------------------------------------------------------------------
+
+
+def test_expand_token_returns_single_byte_for_raw_token():
+    tokenizer = make_tokenizer({}, {})
+
+    assert tokenizer._expand_token(104) == [104]
+
+
+def test_expand_token_returns_raw_bytes_for_merged_token():
+    tokenizer = make_tokenizer({}, {256: [97, 98]})
+
+    assert tokenizer._expand_token(256) == [97, 98]
+
+
+def test_expand_token_raises_keyerror_for_unknown_token_id():
+    tokenizer = make_tokenizer({}, {})
+
+    with pytest.raises(KeyError):
+        tokenizer._expand_token(999)
+
+
+# ---------------------------------------------------------------------------
 # train
 # ---------------------------------------------------------------------------
+
 
 def test_train_raises_valueerror_for_vocabulary_size_too_small():
     with pytest.raises(ValueError):
@@ -149,17 +214,23 @@ def test_train_raises_valueerror_for_vocabulary_size_too_small():
 
 def test_train_raises_filenotfounderror_for_missing_input(temp_vocabulary_output):
     with pytest.raises(FileNotFoundError):
-        BasicTokenizer.train("this_input_does_not_exist.txt", 257, temp_vocabulary_output)
+        BasicTokenizer.train(
+            "this_input_does_not_exist.txt", 257, temp_vocabulary_output
+        )
 
 
-def test_train_raises_fileexistserror_if_vocabulary_already_exists(temp_input_file, temp_vocabulary_output):
+def test_train_raises_fileexistserror_if_vocabulary_already_exists(
+    temp_input_file, temp_vocabulary_output
+):
     (VOCABULARIES_DIR / temp_vocabulary_output).write_bytes(b"placeholder")
 
     with pytest.raises(FileExistsError):
         BasicTokenizer.train(temp_input_file, 257, temp_vocabulary_output)
 
 
-def test_train_raises_valueerror_when_running_out_of_pairs_to_merge(temp_vocabulary_output):
+def test_train_raises_valueerror_when_running_out_of_pairs_to_merge(
+    temp_vocabulary_output,
+):
     file_name = "test_train_short_input.txt"
     path = INPUTS_DIR / file_name
     path.write_text("ab", encoding="utf-8")
@@ -192,6 +263,7 @@ def test_train_creates_a_usable_vocabulary(temp_input_file, temp_vocabulary_outp
 # merge_token_pairs
 # ---------------------------------------------------------------------------
 
+
 def test_merge_token_pairs_merges_non_overlapping_occurrences():
     assert BasicTokenizer.merge_token_pairs([1, 2, 1, 2, 3], (1, 2), 99) == [99, 99, 3]
 
@@ -213,6 +285,7 @@ def test_merge_token_pairs_empty_input_returns_empty_list():
 # get_token_pair_counts
 # ---------------------------------------------------------------------------
 
+
 def test_get_token_pair_counts_counts_overlapping_pairs():
     assert BasicTokenizer.get_token_pair_counts([1, 2, 1, 2, 3]) == {
         (1, 2): 2,
@@ -229,6 +302,7 @@ def test_get_token_pair_counts_empty_for_fewer_than_two_tokens():
 # ---------------------------------------------------------------------------
 # get_most_frequent_token_pair
 # ---------------------------------------------------------------------------
+
 
 def test_get_most_frequent_token_pair_returns_highest_count():
     token_pair_counts = {(1, 2): 3, (2, 3): 5, (3, 4): 1}
