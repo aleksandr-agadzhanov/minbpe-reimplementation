@@ -1,4 +1,4 @@
-from tokenizers.gpt4_tokenizer import GPT4Tokenizer
+from tokenizers.regex_tokenizer import RegexTokenizer
 from tokenizers.basic_tokenizer import BasicTokenizer
 
 input_file_name = "tiny_shakespeare.txt"

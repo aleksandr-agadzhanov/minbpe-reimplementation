@@ -107,6 +107,28 @@ def test_encode_single_character_returns_single_token():
     assert tokenizer.encode("h") == [104]
 
 
+def test_encode_maps_special_token_text_directly_to_reserved_id():
+    tokenizer = make_tokenizer({}, {}, {"<|endoftext|>": 1000})
+
+    assert tokenizer.encode("<|endoftext|>") == [1000]
+
+
+def test_encode_preserves_special_tokens_embedded_in_normal_text():
+    tokenizer = make_tokenizer({}, {}, {"<|endoftext|>": 1000})
+
+    assert tokenizer.encode("a<|endoftext|>b") == [97, 1000, 98]
+
+
+def test_encode_prefers_longer_special_token_when_tokens_overlap():
+    tokenizer = make_tokenizer(
+        {},
+        {},
+        {"<|end|>": 1000, "<|endoftext|>": 1001},
+    )
+
+    assert tokenizer.encode("<|endoftext|>") == [1001]
+
+
 # ---------------------------------------------------------------------------
 # decode
 # ---------------------------------------------------------------------------
@@ -327,20 +349,20 @@ def test_train_adds_special_tokens_to_decode_vocabulary_after_merges(
 
 
 def test_merge_token_pairs_merges_non_overlapping_occurrences():
-    assert BasicTokenizer.merge_token_pairs([1, 2, 1, 2, 3], (1, 2), 99) == [99, 99, 3]
+    assert BasicTokenizer._merge_token_pairs([1, 2, 1, 2, 3], (1, 2), 99) == [99, 99, 3]
 
 
 def test_merge_token_pairs_handles_adjacent_occurrences_of_same_pair():
     # "AAAA" merged left-to-right, non-overlapping, leaves 2 merged tokens.
-    assert BasicTokenizer.merge_token_pairs([1, 1, 1, 1], (1, 1), 99) == [99, 99]
+    assert BasicTokenizer._merge_token_pairs([1, 1, 1, 1], (1, 1), 99) == [99, 99]
 
 
 def test_merge_token_pairs_leaves_unmatched_tokens_unchanged():
-    assert BasicTokenizer.merge_token_pairs([1, 2, 3], (4, 5), 99) == [1, 2, 3]
+    assert BasicTokenizer._merge_token_pairs([1, 2, 3], (4, 5), 99) == [1, 2, 3]
 
 
 def test_merge_token_pairs_empty_input_returns_empty_list():
-    assert BasicTokenizer.merge_token_pairs([], (1, 2), 99) == []
+    assert BasicTokenizer._merge_token_pairs([], (1, 2), 99) == []
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +371,7 @@ def test_merge_token_pairs_empty_input_returns_empty_list():
 
 
 def test_get_token_pair_counts_counts_overlapping_pairs():
-    assert BasicTokenizer.get_token_pair_counts([1, 2, 1, 2, 3]) == {
+    assert BasicTokenizer._get_token_pair_counts([1, 2, 1, 2, 3]) == {
         (1, 2): 2,
         (2, 1): 1,
         (2, 3): 1,
@@ -357,8 +379,8 @@ def test_get_token_pair_counts_counts_overlapping_pairs():
 
 
 def test_get_token_pair_counts_empty_for_fewer_than_two_tokens():
-    assert BasicTokenizer.get_token_pair_counts([]) == {}
-    assert BasicTokenizer.get_token_pair_counts([1]) == {}
+    assert BasicTokenizer._get_token_pair_counts([]) == {}
+    assert BasicTokenizer._get_token_pair_counts([1]) == {}
 
 
 # ---------------------------------------------------------------------------
@@ -369,9 +391,9 @@ def test_get_token_pair_counts_empty_for_fewer_than_two_tokens():
 def test_get_most_frequent_token_pair_returns_highest_count():
     token_pair_counts = {(1, 2): 3, (2, 3): 5, (3, 4): 1}
 
-    assert BasicTokenizer.get_most_frequent_token_pair(token_pair_counts) == (2, 3)
+    assert BasicTokenizer._get_most_frequent_token_pair(token_pair_counts) == (2, 3)
 
 
 def test_get_most_frequent_token_pair_raises_valueerror_for_empty_counts():
     with pytest.raises(ValueError):
-        BasicTokenizer.get_most_frequent_token_pair({})
+        BasicTokenizer._get_most_frequent_token_pair({})

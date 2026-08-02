@@ -120,7 +120,7 @@ class BasicTokenizer:
                 break
 
             # Replace every occurrence of this pair before searching for the next merge.
-            tokens = BasicTokenizer.merge_token_pairs(
+            tokens = BasicTokenizer._merge_token_pairs(
                 tokens, token_pair_with_lowest_id, lowest_token_id
             )
 
@@ -204,7 +204,7 @@ class BasicTokenizer:
         """Train a BPE vocabulary from a text file and save it to `vocabularies/{vocabulary_file_name}`.
 
         Args:
-            input_file_name: Name of the input text file, relative to the `inputs/` directory.
+            input_file_name: Name of the input text file, relative to the `training_datasets/` directory.
             vocabulary_size: Desired size of the final vocabulary - 256 base
                 token values, plus `len(special_tokens)`, plus however many
                 merges are needed to reach this size.
@@ -228,12 +228,91 @@ class BasicTokenizer:
                 save path.
         """
         special_tokens = special_tokens or {}
+        num_merges = BasicTokenizer._validate_special_tokens_and_get_num_merges(
+            vocabulary_size, special_tokens
+        )
+
+        start_time = time.time()
+
+        # Checked upfront so training never runs only to fail on the save step at the very end.
+        vocabulary_path = BasicTokenizer._prepare_vocabulary_save_path(
+            vocabulary_file_name
+        )
+
+        text = BasicTokenizer._read_training_text(input_file_name)
+
+        # Keep the pre-merge tokens around so we can report the compression ratio later.
+        original_tokens = list(text.encode(BasicTokenizer.TEXT_ENCODING))
+
+        # Work on a copy so `original_tokens` still reflects the starting length.
+        tokens = original_tokens.copy()
+        encode_vocabulary = {}
+        decode_vocabulary = {}
+        new_token_id = BasicTokenizer.BASE_VOCABULARY_SIZE
+
+        for _ in range(num_merges):
+            token_pair_counts = BasicTokenizer._get_token_pair_counts(tokens)
+            try:
+                token_pair = BasicTokenizer._get_most_frequent_token_pair(
+                    token_pair_counts
+                )
+            except ValueError:
+                # get_most_frequent_token_pair raises when token_pair_counts is empty,
+                # i.e. fewer than 2 tokens remain to form a pair.
+                raise ValueError(
+                    f"Cannot reach vocabulary_size={vocabulary_size}: ran out of token "
+                    f"pairs to merge after {new_token_id - BasicTokenizer.BASE_VOCABULARY_SIZE} merge(s)"
+                ) from None
+            tokens = BasicTokenizer._merge_token_pairs(tokens, token_pair, new_token_id)
+
+            BasicTokenizer._record_merge(
+                encode_vocabulary, decode_vocabulary, token_pair, new_token_id
+            )
+
+            if verbose:
+                BasicTokenizer._print_merge_progress(
+                    token_pair, new_token_id, start_time
+                )
+
+            new_token_id = new_token_id + 1
+
+        BasicTokenizer._add_special_tokens_to_decode_vocabulary(
+            decode_vocabulary, special_tokens
+        )
+
+        print(BasicTokenizer.PROGRESS_SEPARATOR)
+        print(f"Initial number of tokens - {len(original_tokens)}")
+        print(f"Final number of tokens   - {len(tokens)}")
+        # How many raw tokens, on average, each remaining token now represents.
+        print(f"Compression ratio        - {len(original_tokens) / len(tokens)}x")
+
+        BasicTokenizer._save_vocabulary(
+            vocabulary_path, encode_vocabulary, decode_vocabulary, special_tokens
+        )
+
+        BasicTokenizer._print_run_summary(start_time, vocabulary_path)
+
+    @staticmethod
+    def _validate_special_tokens_and_get_num_merges(
+        vocabulary_size: int, special_tokens: dict[str, int]
+    ) -> int:
+        """Validate `special_tokens` and compute how many merges `train` should perform.
+
+        Args:
+            vocabulary_size: Desired size of the final vocabulary.
+            special_tokens: A mapping of special token text to caller-chosen ids.
+
+        Returns:
+            The number of merges needed to reach `vocabulary_size`.
+
+        Raises:
+            ValueError: If `vocabulary_size` leaves room for fewer than one
+                merge, or if `special_tokens` contains a duplicate or
+                out-of-range id.
+        """
         num_special_tokens = len(special_tokens)
 
-        if (
-            vocabulary_size
-            <= BasicTokenizer.BASE_VOCABULARY_SIZE + num_special_tokens
-        ):
+        if vocabulary_size <= BasicTokenizer.BASE_VOCABULARY_SIZE + num_special_tokens:
             # 0-255 are reserved for raw token values and the rest for special
             # tokens, so at least one merge is required to reach vocabulary_size.
             raise ValueError(
@@ -243,9 +322,7 @@ class BasicTokenizer:
             )
 
         num_merges = (
-            vocabulary_size
-            - BasicTokenizer.BASE_VOCABULARY_SIZE
-            - num_special_tokens
+            vocabulary_size - BasicTokenizer.BASE_VOCABULARY_SIZE - num_special_tokens
         )
         # The ids merges will use, so a caller-chosen special token id can be checked against it.
         merge_id_range = range(
@@ -268,9 +345,22 @@ class BasicTokenizer:
                     f"token id (merges will use ids {merge_id_range.start}-{merge_id_range.stop - 1})"
                 )
 
-        start_time = time.time()
+        return num_merges
 
-        # Checked upfront so training never runs only to fail on the save step at the very end.
+    @staticmethod
+    def _prepare_vocabulary_save_path(vocabulary_file_name: str) -> Path:
+        """Resolve where a trained vocabulary should be saved, before training runs.
+
+        Args:
+            vocabulary_file_name: Name to save the vocabulary under, relative
+                to the `vocabularies/` directory.
+
+        Returns:
+            The resolved path to save the vocabulary to.
+
+        Raises:
+            FileExistsError: If a vocabulary file already exists at the resolved path.
+        """
         vocabulary_path = (
             Path(__file__).resolve().parent.parent
             / BasicTokenizer.VOCABULARIES_DIRECTORY_NAME
@@ -278,7 +368,22 @@ class BasicTokenizer:
         )
         if vocabulary_path.exists():
             raise FileExistsError(f"Vocabulary file already exists: {vocabulary_path}")
+        return vocabulary_path
 
+    @staticmethod
+    def _read_training_text(input_file_name: str) -> str:
+        """Read the input text to train a vocabulary from.
+
+        Args:
+            input_file_name: Name of the input text file, relative to the
+                `training_datasets/` directory.
+
+        Returns:
+            The full contents of the input file.
+
+        Raises:
+            FileNotFoundError: If no input file exists at the resolved path.
+        """
         input_path = (
             Path(__file__).resolve().parent.parent
             / BasicTokenizer.INPUTS_DIRECTORY_NAME
@@ -288,68 +393,93 @@ class BasicTokenizer:
             with open(
                 input_path, "r", encoding=BasicTokenizer.TEXT_ENCODING
             ) as input_file:
-                text = input_file.read()
+                return input_file.read()
         except FileNotFoundError:
             raise FileNotFoundError(f"Input file not found: {input_path}") from None
 
-        # Keep the pre-merge tokens around so we can report the compression ratio later.
-        original_tokens = list(text.encode(BasicTokenizer.TEXT_ENCODING))
+    @staticmethod
+    def _record_merge(
+        encode_vocabulary: dict[tuple[int, int], int],
+        decode_vocabulary: dict[int, list[int]],
+        token_pair: tuple[int, int],
+        new_token_id: int,
+    ) -> None:
+        """Record a newly learned merge in both vocabularies, in place.
 
-        # Work on a copy so `original_tokens` still reflects the starting length.
-        tokens = original_tokens.copy()
-        encode_vocabulary = {}
-        decode_vocabulary = {}
-        new_token_id = BasicTokenizer.BASE_VOCABULARY_SIZE
+        Args:
+            encode_vocabulary: Maps a byte-pair to the merge id that replaces it.
+            decode_vocabulary: Maps a token id to the raw bytes it expands to.
+            token_pair: The adjacent pair of token ids being merged.
+            new_token_id: The token id assigned to `token_pair`.
+        """
+        encode_vocabulary[token_pair] = new_token_id
+        decode_vocabulary[new_token_id] = []
 
-        for _ in range(num_merges):
-            token_pair_counts = BasicTokenizer.get_token_pair_counts(tokens)
-            try:
-                token_pair = BasicTokenizer.get_most_frequent_token_pair(
-                    token_pair_counts
-                )
-            except ValueError:
-                # get_most_frequent_token_pair raises when token_pair_counts is empty,
-                # i.e. fewer than 2 tokens remain to form a pair.
-                raise ValueError(
-                    f"Cannot reach vocabulary_size={vocabulary_size}: ran out of token "
-                    f"pairs to merge after {new_token_id - BasicTokenizer.BASE_VOCABULARY_SIZE} merge(s)"
-                ) from None
-            tokens = BasicTokenizer.merge_token_pairs(tokens, token_pair, new_token_id)
+        # A component >= BASE_VOCABULARY_SIZE is itself an earlier merge, already fully
+        # expanded to raw bytes in decode_vocabulary - splice that in so every entry stays flat.
+        for token_id in token_pair:
+            if token_id >= BasicTokenizer.BASE_VOCABULARY_SIZE:
+                decode_vocabulary[new_token_id].extend(decode_vocabulary[token_id])
+            else:
+                decode_vocabulary[new_token_id].append(token_id)
 
-            encode_vocabulary[token_pair] = new_token_id
-            decode_vocabulary[new_token_id] = []
+    @staticmethod
+    def _print_merge_progress(
+        token_pair: tuple[int, int], new_token_id: int, start_time: float
+    ) -> None:
+        """Print a single line reporting a merge that was just added to the vocabulary.
 
-            # A component >= BASE_VOCABULARY_SIZE is itself an earlier merge, already fully
-            # expanded to raw bytes in decode_vocabulary - splice that in so every entry stays flat.
-            for token_id in token_pair:
-                if token_id >= BasicTokenizer.BASE_VOCABULARY_SIZE:
-                    decode_vocabulary[new_token_id].extend(decode_vocabulary[token_id])
-                else:
-                    decode_vocabulary[new_token_id].append(token_id)
+        Args:
+            token_pair: The adjacent pair of token ids that was merged.
+            new_token_id: The token id assigned to `token_pair`.
+            start_time: The `time.time()` value training started at.
+        """
+        merge_hours, merge_remainder_seconds = divmod(
+            int(time.time() - start_time), 3600
+        )
+        merge_minutes, merge_seconds = divmod(merge_remainder_seconds, 60)
+        print(
+            f"Added new token - {token_pair} - to the vocabulary with token ID - {new_token_id} "
+            f"({merge_hours}h {merge_minutes}m {merge_seconds}s elapsed)"
+        )
 
-            if verbose:
-                merge_hours, merge_remainder_seconds = divmod(
-                    int(time.time() - start_time), 3600
-                )
-                merge_minutes, merge_seconds = divmod(merge_remainder_seconds, 60)
-                print(
-                    f"Added new token - {token_pair} - to the vocabulary with token ID - {new_token_id} "
-                    f"({merge_hours}h {merge_minutes}m {merge_seconds}s elapsed)"
-                )
+    @staticmethod
+    def _add_special_tokens_to_decode_vocabulary(
+        decode_vocabulary: dict[int, list[int]], special_tokens: dict[str, int]
+    ) -> None:
+        """Add each special token's raw-byte expansion to `decode_vocabulary`, in place.
 
-            new_token_id = new_token_id + 1
+        Special tokens are never produced by merging byte pairs, so they only
+        need a decode_vocabulary entry - `_expand_token` already handles any
+        id >= 256 generically.
 
-        # Special tokens are never produced by merging byte pairs, so they only need a
-        # decode_vocabulary entry - _expand_token() already handles any id >= 256 generically.
+        Args:
+            decode_vocabulary: Maps a token id to the raw bytes it expands to.
+            special_tokens: A mapping of special token text to caller-chosen ids.
+        """
         for token, token_id in special_tokens.items():
-            decode_vocabulary[token_id] = list(token.encode(BasicTokenizer.TEXT_ENCODING))
+            decode_vocabulary[token_id] = list(
+                token.encode(BasicTokenizer.TEXT_ENCODING)
+            )
 
-        print(BasicTokenizer.PROGRESS_SEPARATOR)
-        print(f"Initial number of tokens - {len(original_tokens)}")
-        print(f"Final number of tokens   - {len(tokens)}")
-        # How many raw tokens, on average, each remaining token now represents.
-        print(f"Compression ratio        - {len(original_tokens) / len(tokens)}x")
+    @staticmethod
+    def _save_vocabulary(
+        vocabulary_path: Path,
+        encode_vocabulary: dict[tuple[int, int], int],
+        decode_vocabulary: dict[int, list[int]],
+        special_tokens: dict[str, int],
+    ) -> None:
+        """Pickle the trained vocabulary to `vocabulary_path`.
 
+        Args:
+            vocabulary_path: The resolved path to save the vocabulary to.
+            encode_vocabulary: Maps a byte-pair to the merge id that replaces it.
+            decode_vocabulary: Maps a token id to the raw bytes it expands to.
+            special_tokens: A mapping of special token text to caller-chosen ids.
+
+        Raises:
+            FileNotFoundError: If the `vocabularies/` directory doesn't exist.
+        """
         # Saved together since encode() and decode() each need a differently shaped vocabulary.
         vocabulary = {
             BasicTokenizer.ENCODE_VOCABULARY_KEY: encode_vocabulary,
@@ -364,15 +494,25 @@ class BasicTokenizer:
                 f"Vocabularies directory not found: {vocabulary_path.parent}"
             ) from None
 
+    @staticmethod
+    def _print_run_summary(start_time: float, vocabulary_path: Path) -> None:
+        """Print where the vocabulary was saved and how long training took.
+
+        Args:
+            start_time: The `time.time()` value training started at.
+            vocabulary_path: The resolved path the vocabulary was saved to.
+        """
         elapsed_hours, remainder_seconds = divmod(int(time.time() - start_time), 3600)
         elapsed_minutes, elapsed_seconds = divmod(remainder_seconds, 60)
 
         print(BasicTokenizer.PROGRESS_SEPARATOR)
         print(f"Saved the vocabulary to the path - {vocabulary_path}")
-        print(f"Time elapsed              - {elapsed_hours}h {elapsed_minutes}m {elapsed_seconds}s")
+        print(
+            f"Time elapsed              - {elapsed_hours}h {elapsed_minutes}m {elapsed_seconds}s"
+        )
 
     @staticmethod
-    def get_token_pair_counts(tokens: list[int]) -> dict[tuple[int, int], int]:
+    def _get_token_pair_counts(tokens: list[int]) -> dict[tuple[int, int], int]:
         """Count occurrences of each consecutive pair of tokens.
 
         Args:
@@ -394,7 +534,7 @@ class BasicTokenizer:
         return token_pair_counts
 
     @staticmethod
-    def get_most_frequent_token_pair(
+    def _get_most_frequent_token_pair(
         token_pair_counts: dict[tuple[int, int], int],
     ) -> tuple[int, int]:
         """Return the most frequent token pair.
@@ -414,7 +554,7 @@ class BasicTokenizer:
         return max(token_pair_counts.items(), key=lambda item: item[1])[0]
 
     @staticmethod
-    def merge_token_pairs(
+    def _merge_token_pairs(
         tokens: list[int], token_pair: tuple[int, int], merged_token_id: int
     ) -> list[int]:
         """Replace every occurrence of `token_pair` with `merged_token_id`.

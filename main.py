@@ -3,7 +3,7 @@ import pickle
 import tiktoken
 
 from tokenizers.basic_tokenizer import BasicTokenizer
-from tokenizers.gpt4_tokenizer import GPT4Tokenizer
+from tokenizers.regex_tokenizer import RegexTokenizer
 from utils import print_vocabulary
 
 vocabulary_file_name = "gpt4_tokenizer_1000.pkl"
