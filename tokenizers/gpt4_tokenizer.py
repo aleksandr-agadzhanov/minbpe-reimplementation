@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import pickle
+import time
 from pathlib import Path
 
 import regex as re
@@ -9,15 +12,16 @@ from tokenizers.basic_tokenizer import BasicTokenizer
 class GPT4Tokenizer(BasicTokenizer):
     SPLIT_PATTERN = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
 
-    def encode(self, text: str) -> list[int]:
-        """Encode text into a list of token ids using this tokenizer's trained vocabulary.
+    def _encode_non_special(self, text: str) -> list[int]:
+        """Encode text containing no special tokens into a list of token ids.
 
         The text is first split into chunks using `SPLIT_PATTERN`, and each
         chunk is encoded independently, so a merge is never applied across a
         chunk boundary - matching how the vocabulary was trained.
 
         Args:
-            text: The text to encode.
+            text: The text to encode. Must not contain special token text -
+                use `encode` for text that might.
 
         Returns:
             A list of token ids representing the encoded text.
@@ -27,8 +31,8 @@ class GPT4Tokenizer(BasicTokenizer):
 
         tokens = []
         for text_chunk in text_chunks:
-            # super().encode() applies BasicTokenizer's merge loop to a single chunk at a time.
-            tokens.extend(super().encode(text_chunk))
+            # super()._encode_non_special() applies BasicTokenizer's merge loop to a single chunk at a time.
+            tokens.extend(super()._encode_non_special(text_chunk))
 
         return tokens
 
@@ -37,6 +41,7 @@ class GPT4Tokenizer(BasicTokenizer):
         input_file_name: str,
         vocabulary_size: int,
         vocabulary_file_name: str,
+        special_tokens: dict[str, int] | None = None,
         verbose: bool = False,
     ):
         """Train a BPE vocabulary from a text file and save it to `vocabularies/{vocabulary_file_name}`.
@@ -48,25 +53,70 @@ class GPT4Tokenizer(BasicTokenizer):
 
         Args:
             input_file_name: Name of the input text file, relative to the `training_datasets/` directory.
-            vocabulary_size: Desired size of the final vocabulary (256 base
-                token values plus however many merges are needed to reach this size).
+            vocabulary_size: Desired size of the final vocabulary - 256 base
+                token values, plus `len(special_tokens)`, plus however many
+                merges are needed to reach this size.
             vocabulary_file_name: Name to save the resulting vocabulary under,
                 relative to the `vocabularies/` directory.
+            special_tokens: A mapping of special token text (e.g. "<|endoftext|>")
+                to the token id the caller wants it saved under. Ids are
+                caller-controlled and must each be unique, >= 256 (below that
+                is reserved for raw byte values), and outside the range of ids
+                the merges will occupy.
             verbose: If True, print each merge as it's added to the vocabulary.
 
         Raises:
-            ValueError: If `vocabulary_size` is not greater than 256, or if the
-                input text runs out of token pairs to merge before reaching it.
+            ValueError: If `vocabulary_size` leaves room for fewer than one
+                merge, if `special_tokens` contains a duplicate or
+                out-of-range id, or if the input text runs out of token pairs
+                to merge before reaching `vocabulary_size`.
             FileNotFoundError: If no input file exists at the resolved path, or
                 if the `vocabularies/` directory doesn't exist.
             FileExistsError: If a vocabulary file already exists at the resolved
                 save path.
         """
-        if vocabulary_size <= BasicTokenizer.BASE_VOCABULARY_SIZE:
-            # 0-255 are already reserved for raw token values, so at least one merge is required.
+        special_tokens = special_tokens or {}
+        num_special_tokens = len(special_tokens)
+
+        if (
+            vocabulary_size
+            <= BasicTokenizer.BASE_VOCABULARY_SIZE + num_special_tokens
+        ):
+            # 0-255 are reserved for raw token values and the rest for special
+            # tokens, so at least one merge is required to reach vocabulary_size.
             raise ValueError(
-                f"vocabulary_size must be greater than {BasicTokenizer.BASE_VOCABULARY_SIZE}, got {vocabulary_size}"
+                f"vocabulary_size must be greater than "
+                f"{BasicTokenizer.BASE_VOCABULARY_SIZE} + len(special_tokens) "
+                f"({BasicTokenizer.BASE_VOCABULARY_SIZE + num_special_tokens}), got {vocabulary_size}"
             )
+
+        num_merges = (
+            vocabulary_size
+            - BasicTokenizer.BASE_VOCABULARY_SIZE
+            - num_special_tokens
+        )
+        # The ids merges will use, so a caller-chosen special token id can be checked against it.
+        merge_id_range = range(
+            BasicTokenizer.BASE_VOCABULARY_SIZE,
+            BasicTokenizer.BASE_VOCABULARY_SIZE + num_merges,
+        )
+        if len(set(special_tokens.values())) != num_special_tokens:
+            raise ValueError(
+                f"special_tokens ids must be unique, got: {special_tokens}"
+            )
+        for token, token_id in special_tokens.items():
+            if token_id < BasicTokenizer.BASE_VOCABULARY_SIZE:
+                raise ValueError(
+                    f"special_tokens id for {token!r} must be >= "
+                    f"{BasicTokenizer.BASE_VOCABULARY_SIZE}, got {token_id}"
+                )
+            if token_id in merge_id_range:
+                raise ValueError(
+                    f"special_tokens id for {token!r} ({token_id}) collides with a merge "
+                    f"token id (merges will use ids {merge_id_range.start}-{merge_id_range.stop - 1})"
+                )
+
+        start_time = time.time()
 
         # Checked upfront so training never runs only to fail on the save step at the very end.
         vocabulary_path = (
@@ -103,7 +153,6 @@ class GPT4Tokenizer(BasicTokenizer):
         encode_vocabulary = {}
         decode_vocabulary = {}
         new_token_id = BasicTokenizer.BASE_VOCABULARY_SIZE
-        num_merges = vocabulary_size - new_token_id
 
         for _ in range(num_merges):
             # Counts are accumulated per chunk internally, so cross-chunk pairs are never counted.
@@ -138,11 +187,21 @@ class GPT4Tokenizer(BasicTokenizer):
                     decode_vocabulary[new_token_id].append(token_id)
 
             if verbose:
+                merge_hours, merge_remainder_seconds = divmod(
+                    int(time.time() - start_time), 3600
+                )
+                merge_minutes, merge_seconds = divmod(merge_remainder_seconds, 60)
                 print(
-                    f"Added new token - {token_pair} - to the vocabulary with token ID - {new_token_id}"
+                    f"Added new token - {token_pair} - to the vocabulary with token ID - {new_token_id} "
+                    f"({merge_hours}h {merge_minutes}m {merge_seconds}s elapsed)"
                 )
 
             new_token_id = new_token_id + 1
+
+        # Special tokens are never produced by merging byte pairs, so they only need a
+        # decode_vocabulary entry - _expand_token() already handles any id >= 256 generically.
+        for token, token_id in special_tokens.items():
+            decode_vocabulary[token_id] = list(token.encode(BasicTokenizer.TEXT_ENCODING))
 
         # token_chunks is a list of chunks, so the total token count is the sum of each chunk's length.
         num_original_tokens = sum([len(chunk) for chunk in original_token_chunks])
@@ -158,6 +217,7 @@ class GPT4Tokenizer(BasicTokenizer):
         vocabulary = {
             BasicTokenizer.ENCODE_VOCABULARY_KEY: encode_vocabulary,
             BasicTokenizer.DECODE_VOCABULARY_KEY: decode_vocabulary,
+            BasicTokenizer.SPECIAL_TOKENS_KEY: special_tokens,
         }
         try:
             with open(vocabulary_path, "wb") as output_file:
@@ -167,8 +227,12 @@ class GPT4Tokenizer(BasicTokenizer):
                 f"Vocabularies directory not found: {vocabulary_path.parent}"
             ) from None
 
+        elapsed_hours, remainder_seconds = divmod(int(time.time() - start_time), 3600)
+        elapsed_minutes, elapsed_seconds = divmod(remainder_seconds, 60)
+
         print(BasicTokenizer.PROGRESS_SEPARATOR)
         print(f"Saved the vocabulary to the path - {vocabulary_path}")
+        print(f"Time elapsed              - {elapsed_hours}h {elapsed_minutes}m {elapsed_seconds}s")
 
     @staticmethod
     def get_token_pair_counts_for_chunks(

@@ -1,34 +1,25 @@
 import pickle
+
 import tiktoken
 
 from tokenizers.basic_tokenizer import BasicTokenizer
 from tokenizers.gpt4_tokenizer import GPT4Tokenizer
 from utils import print_vocabulary
 
-vocabulary_file_name = "tokenizer_1000.pkl"
-input_file_name = "text.txt"
-
-# with open(f"vocabularies/{vocabulary_file_name}", 'rb') as file:
-#     vocabulary = pickle.load(file)
-
-# for tokens in vocabulary["decode"].values():
-#     # A merged token can be a partial UTF-8 sequence, so decoding may fail - replace instead of crashing.
-#     characters = bytes(tokens).decode("utf-8", errors="replace")
-#     print(characters)
+vocabulary_file_name = "gpt4_tokenizer_1000.pkl"
 
 # tokenizer = BasicTokenizer(vocabulary_file_name)
-tokenizer = GPT4Tokenizer(vocabulary_file_name)
+# tokenizer = GPT4Tokenizer(vocabulary_file_name)
 
-# with open(f"inputs/{input_file_name}", 'r') as input_file:
-#     text = input_file.read()
+# text = "Hello world how are you doing? It is a new day today!"
 
-text = "hello world!!!? (안녕하세요!) lol123 😉"
+# tokens = tokenizer.encode(text)
+# decoded_text_as_list = tokenizer.decode_as_list(tokens)
+# decoded_text = tokenizer.decode(tokens)
 
-tokens = tokenizer.encode(text)
-decoded_text = tokenizer.decode(tokens)
-
-print(tokens)
-print(decoded_text)
+# print(tokens)
+# print(decoded_text_as_list)
+# print(decoded_text)
 
 # print_vocabulary(vocabulary_file_name, 100)
 

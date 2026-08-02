@@ -18,6 +18,8 @@ def make_tokenizer(encode_vocabulary, decode_vocabulary):
     tokenizer = GPT4Tokenizer.__new__(GPT4Tokenizer)
     tokenizer.encode_vocabulary = encode_vocabulary
     tokenizer.decode_vocabulary = decode_vocabulary
+    # super().encode() (still BasicTokenizer's, unchanged in this file) now needs this attribute.
+    tokenizer.special_tokens = {}
     return tokenizer
 
 
@@ -143,6 +145,62 @@ def test_train_creates_a_usable_vocabulary(temp_input_file, temp_vocabulary_outp
     tokenizer = GPT4Tokenizer(temp_vocabulary_output)
     text = "a b a b a b a b"
     assert tokenizer.decode(tokenizer.encode(text)) == text
+
+
+def test_train_raises_valueerror_for_vocabulary_size_too_small_with_special_tokens():
+    with pytest.raises(ValueError):
+        GPT4Tokenizer.train(
+            "irrelevant.txt", 257, "irrelevant.pkl", special_tokens={"<|x|>": 300}
+        )
+
+
+def test_train_raises_valueerror_for_duplicate_special_token_ids():
+    with pytest.raises(ValueError):
+        GPT4Tokenizer.train(
+            "irrelevant.txt",
+            1000,
+            "irrelevant.pkl",
+            special_tokens={"<|a|>": 300, "<|b|>": 300},
+        )
+
+
+def test_train_raises_valueerror_for_special_token_id_below_base_vocabulary_size():
+    with pytest.raises(ValueError):
+        GPT4Tokenizer.train(
+            "irrelevant.txt", 1000, "irrelevant.pkl", special_tokens={"<|x|>": 100}
+        )
+
+
+def test_train_raises_valueerror_for_special_token_id_colliding_with_merge_range():
+    # vocabulary_size=258 with one special token leaves exactly one merge, which
+    # will be assigned token id 256 - the same id claimed by the special token.
+    with pytest.raises(ValueError):
+        GPT4Tokenizer.train(
+            "irrelevant.txt", 258, "irrelevant.pkl", special_tokens={"<|x|>": 256}
+        )
+
+
+def test_train_adds_special_tokens_to_decode_vocabulary_after_merges(
+    temp_input_file, temp_vocabulary_output
+):
+    GPT4Tokenizer.train(
+        temp_input_file,
+        258,
+        temp_vocabulary_output,
+        special_tokens={"<|endoftext|>": 1000},
+    )
+
+    with open(VOCABULARIES_DIR / temp_vocabulary_output, "rb") as file:
+        vocabulary = pickle.load(file)
+
+    # A merge still fills id 256; the special token keeps its caller-chosen id.
+    assert set(vocabulary["encode"].values()) == {256}
+    assert 1000 not in vocabulary["encode"].values()
+    assert vocabulary["decode"][1000] == list(b"<|endoftext|>")
+    assert vocabulary["special_tokens"] == {"<|endoftext|>": 1000}
+
+    tokenizer = GPT4Tokenizer(temp_vocabulary_output)
+    assert tokenizer.decode([1000]) == "<|endoftext|>"
 
 
 # ---------------------------------------------------------------------------
