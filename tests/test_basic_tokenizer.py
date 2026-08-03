@@ -365,6 +365,51 @@ def test_merge_token_pairs_empty_input_returns_empty_list():
     assert BasicTokenizer._merge_token_pairs([], (1, 2), 99) == []
 
 
+def test_merge_token_pairs_and_update_counts_matches_two_pass_behavior():
+    tokens = [1, 2, 1, 2, 3]
+
+    merged_tokens, updated_counts = BasicTokenizer._merge_token_pairs_and_update_counts(
+        tokens, (1, 2), 99
+    )
+
+    expected_merged_tokens = BasicTokenizer._merge_token_pairs(tokens, (1, 2), 99)
+    expected_counts = BasicTokenizer._get_token_pair_counts(expected_merged_tokens)
+
+    assert merged_tokens == expected_merged_tokens
+    assert updated_counts == expected_counts
+
+
+def test_merge_token_pairs_and_update_counts_no_match_keeps_tokens_and_recounts():
+    tokens = [1, 2, 3]
+
+    merged_tokens, updated_counts = BasicTokenizer._merge_token_pairs_and_update_counts(
+        tokens, (4, 5), 99
+    )
+
+    assert merged_tokens == tokens
+    assert updated_counts == BasicTokenizer._get_token_pair_counts(tokens)
+
+
+def test_merge_token_pairs_and_update_counts_adjacent_matches_are_counted_correctly():
+    tokens = [1, 1, 1, 1]
+
+    merged_tokens, updated_counts = BasicTokenizer._merge_token_pairs_and_update_counts(
+        tokens, (1, 1), 99
+    )
+
+    assert merged_tokens == [99, 99]
+    assert updated_counts == {(99, 99): 1}
+
+
+def test_merge_token_pairs_and_update_counts_empty_input_returns_empty_results():
+    merged_tokens, updated_counts = BasicTokenizer._merge_token_pairs_and_update_counts(
+        [], (1, 2), 99
+    )
+
+    assert merged_tokens == []
+    assert updated_counts == {}
+
+
 # ---------------------------------------------------------------------------
 # get_token_pair_counts
 # ---------------------------------------------------------------------------

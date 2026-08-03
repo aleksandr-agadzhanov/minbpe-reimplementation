@@ -97,15 +97,18 @@ class RegexTokenizer(BasicTokenizer):
 
         # Work on a copy so `original_token_chunks` still reflects the starting length.
         token_chunks = original_token_chunks.copy()
+        # Count once across all chunks, and track which chunks contain each pair so
+        # later merges only rescan the chunks that could actually contain them.
+        token_pair_counts, pair_chunk_indices = (
+            RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(
+                token_chunks
+            )
+        )
         encode_vocabulary = {}
         decode_vocabulary = {}
         new_token_id = BasicTokenizer.BASE_VOCABULARY_SIZE
 
         for _ in range(num_merges):
-            # Counts are accumulated per chunk internally, so cross-chunk pairs are never counted.
-            token_pair_counts = RegexTokenizer._get_token_pair_counts_for_chunks(
-                token_chunks
-            )
             try:
                 token_pair = BasicTokenizer._get_most_frequent_token_pair(
                     token_pair_counts
@@ -117,9 +120,14 @@ class RegexTokenizer(BasicTokenizer):
                     f"Cannot reach vocabulary_size={vocabulary_size}: ran out of token "
                     f"pairs to merge after {new_token_id - BasicTokenizer.BASE_VOCABULARY_SIZE} merge(s)"
                 ) from None
-            # Merging each chunk independently keeps every chunk's boundaries intact for the next iteration.
-            token_chunks = RegexTokenizer._merge_token_pairs_for_chunks(
-                token_chunks, token_pair, new_token_id
+            # Only chunks known to contain token_pair are rescanned - every other
+            # chunk is left untouched, avoiding a full-corpus rescan per merge.
+            RegexTokenizer._merge_token_pairs_for_chunks_and_update_counts(
+                token_chunks,
+                token_pair,
+                new_token_id,
+                token_pair_counts,
+                pair_chunk_indices,
             )
 
             BasicTokenizer._record_merge(
@@ -154,55 +162,100 @@ class RegexTokenizer(BasicTokenizer):
         BasicTokenizer._print_run_summary(start_time, vocabulary_path)
 
     @staticmethod
-    def _get_token_pair_counts_for_chunks(
+    def _get_token_pair_counts_and_locations_for_chunks(
         token_chunks: list[list[int]],
-    ) -> dict[tuple[int, int], int]:
-        """Count occurrences of each consecutive pair of tokens within each chunk.
+    ) -> tuple[dict[tuple[int, int], int], dict[tuple[int, int], set[int]]]:
+        """Count consecutive token pairs per chunk and record which chunks contain each pair.
 
-        Pairs are counted separately per chunk before being summed, so a pair
-        that straddles two chunks (e.g. the last token of one chunk and the
-        first token of the next) is never counted - this keeps merges from
-        ever crossing a chunk boundary.
+        The chunk-index lookup lets a later merge skip every chunk that can't
+        contain the pair being merged, instead of rescanning the whole corpus.
 
         Args:
             token_chunks: A list of token id chunks, each produced by
                 splitting the original text with `SPLIT_PATTERN`.
 
         Returns:
-            A dictionary mapping each adjacent (token, next_token) pair to the
-            total number of times it occurs consecutively within any chunk.
+            A tuple of (token_pair_counts, pair_chunk_indices): the summed
+            per-chunk pair counts, and a mapping from each pair to the set of
+            chunk indices it occurs in.
         """
         token_pair_counts = {}
+        pair_chunk_indices = {}
 
-        for chunk in token_chunks:
+        for chunk_index, chunk in enumerate(token_chunks):
             # Counting within a single chunk at a time is what prevents pairs from spanning chunks.
             chunk_token_pair_counts = BasicTokenizer._get_token_pair_counts(chunk)
             for token_pair, count in chunk_token_pair_counts.items():
-                # Accumulate into the running total across all chunks seen so far.
                 token_pair_counts[token_pair] = (
                     token_pair_counts.get(token_pair, 0) + count
                 )
+                pair_chunk_indices.setdefault(token_pair, set()).add(chunk_index)
 
-        return token_pair_counts
+        return token_pair_counts, pair_chunk_indices
 
     @staticmethod
-    def _merge_token_pairs_for_chunks(
-        token_chunks: list[list[int]], token_pair: tuple[int, int], merged_token_id: int
-    ) -> list[list[int]]:
-        """Replace every occurrence of `token_pair` with `merged_token_id`, within each chunk.
+    def _merge_token_pairs_for_chunks_and_update_counts(
+        token_chunks: list[list[int]],
+        token_pair: tuple[int, int],
+        merged_token_id: int,
+        token_pair_counts: dict[tuple[int, int], int],
+        pair_chunk_indices: dict[tuple[int, int], set[int]],
+    ) -> None:
+        """Merge `token_pair`, but only in the chunks that actually contain it.
+
+        `pair_chunk_indices` guarantees every chunk containing `token_pair` is
+        listed under it, so every other chunk is guaranteed not to contain it
+        and can be skipped entirely - this avoids rescanning the full corpus
+        on every merge.
 
         Args:
-            token_chunks: A list of token id chunks, each produced by
-                splitting the original text with `SPLIT_PATTERN`.
+            token_chunks: A list of token id chunks; entries are replaced
+                in place for every chunk that contained `token_pair`.
             token_pair: The adjacent pair of token ids to replace wherever it occurs.
             merged_token_id: The token id to substitute for `token_pair`.
-
-        Returns:
-            A new list of chunks, each with every occurrence of `token_pair`
-            collapsed into a single `merged_token_id`.
+            token_pair_counts: Global pair counts, updated in place to reflect the merge.
+            pair_chunk_indices: Pair -> chunk-index lookup, updated in place to reflect the merge.
         """
-        # Merging each chunk separately keeps a pair from ever being merged across a chunk boundary.
-        return [
-            BasicTokenizer._merge_token_pairs(chunk, token_pair, merged_token_id)
-            for chunk in token_chunks
-        ]
+        # token_pair can't reappear after merging, so drop its entry instead of updating it.
+        affected_chunk_indices = pair_chunk_indices.pop(token_pair, set())
+
+        for chunk_index in affected_chunk_indices:
+            # Snapshot this chunk before mutation so we can diff its old contribution.
+            old_chunk = token_chunks[chunk_index]
+            old_chunk_pair_counts = BasicTokenizer._get_token_pair_counts(old_chunk)
+
+            # Rebuild this chunk once: merge target pair and get its new local pair counts.
+            new_chunk, new_chunk_pair_counts = (
+                BasicTokenizer._merge_token_pairs_and_update_counts(
+                    old_chunk, token_pair, merged_token_id
+                )
+            )
+            token_chunks[chunk_index] = new_chunk
+
+            # Both dicts sum/union contributions across chunks, so update by delta rather than overwrite.
+            changed_pairs = old_chunk_pair_counts.keys() | new_chunk_pair_counts.keys()
+            for pair in changed_pairs:
+                count_delta = new_chunk_pair_counts.get(
+                    pair, 0
+                ) - old_chunk_pair_counts.get(pair, 0)
+                if count_delta == 0:
+                    continue
+
+                updated_count = token_pair_counts.get(pair, 0) + count_delta
+                if updated_count > 0:
+                    token_pair_counts[pair] = updated_count
+                else:
+                    # Remove dead entries to keep _get_most_frequent_token_pair input compact.
+                    token_pair_counts.pop(pair, None)
+
+                if pair in new_chunk_pair_counts:
+                    # This chunk now contains pair (possibly for the first time) - index it.
+                    pair_chunk_indices.setdefault(pair, set()).add(chunk_index)
+                else:
+                    # This chunk no longer contains pair - drop it from the index.
+                    chunk_indices = pair_chunk_indices.get(pair)
+                    if chunk_indices is not None:
+                        chunk_indices.discard(chunk_index)
+                        if not chunk_indices:
+                            # Drop empty index sets so pair_chunk_indices only contains live pairs.
+                            del pair_chunk_indices[pair]

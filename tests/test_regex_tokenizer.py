@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from tokenizers.basic_tokenizer import BasicTokenizer
 from tokenizers.regex_tokenizer import RegexTokenizer
 
 # GPT4Tokenizer resolves vocabularies/inputs relative to its own module file,
@@ -204,60 +205,196 @@ def test_train_adds_special_tokens_to_decode_vocabulary_after_merges(
 
 
 # ---------------------------------------------------------------------------
-# get_token_pair_counts_for_chunks
+# get_token_pair_counts_and_locations_for_chunks
 # ---------------------------------------------------------------------------
 
 
-def test_get_token_pair_counts_for_chunks_counts_within_each_chunk_separately():
+def test_get_token_pair_counts_and_locations_for_chunks_counts_within_each_chunk_separately():
     token_chunks = [[1, 2, 3], [4, 5]]
 
     # (3, 4) would only occur if the chunk boundary were ignored - it must not be counted.
-    assert RegexTokenizer._get_token_pair_counts_for_chunks(token_chunks) == {
+    token_pair_counts, _ = RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(
+        token_chunks
+    )
+
+    assert token_pair_counts == {
         (1, 2): 1,
         (2, 3): 1,
         (4, 5): 1,
     }
 
 
-def test_get_token_pair_counts_for_chunks_sums_counts_across_chunks():
+def test_get_token_pair_counts_and_locations_for_chunks_sums_counts_across_chunks():
     token_chunks = [[1, 2], [1, 2], [1, 2]]
 
-    assert RegexTokenizer._get_token_pair_counts_for_chunks(token_chunks) == {(1, 2): 3}
+    token_pair_counts, _ = RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(
+        token_chunks
+    )
+
+    assert token_pair_counts == {(1, 2): 3}
 
 
-def test_get_token_pair_counts_for_chunks_ignores_chunks_with_fewer_than_two_tokens():
+def test_get_token_pair_counts_and_locations_for_chunks_ignores_chunks_with_fewer_than_two_tokens():
     token_chunks = [[1], [2, 3], []]
 
-    assert RegexTokenizer._get_token_pair_counts_for_chunks(token_chunks) == {(2, 3): 1}
+    token_pair_counts, _ = RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(
+        token_chunks
+    )
+
+    assert token_pair_counts == {(2, 3): 1}
 
 
-def test_get_token_pair_counts_for_chunks_empty_list_returns_empty_dict():
-    assert RegexTokenizer._get_token_pair_counts_for_chunks([]) == {}
+def test_get_token_pair_counts_and_locations_for_chunks_empty_list_returns_empty_dict():
+    token_pair_counts, _ = RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(
+        []
+    )
+
+    assert token_pair_counts == {}
 
 
-# ---------------------------------------------------------------------------
-# merge_token_pairs_for_chunks
-# ---------------------------------------------------------------------------
+def test_merge_token_pairs_for_chunks_and_update_counts_matches_two_pass_behavior():
+    original_token_chunks = [[1, 2, 3], [1, 2]]
+    token_chunks = [chunk.copy() for chunk in original_token_chunks]
+    token_pair_counts, pair_chunk_indices = (
+        RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(token_chunks)
+    )
 
+    RegexTokenizer._merge_token_pairs_for_chunks_and_update_counts(
+        token_chunks, (1, 2), 99, token_pair_counts, pair_chunk_indices
+    )
 
-def test_merge_token_pairs_for_chunks_merges_within_each_chunk_independently():
-    token_chunks = [[1, 2, 3], [1, 2]]
-
-    assert RegexTokenizer._merge_token_pairs_for_chunks(token_chunks, (1, 2), 99) == [
-        [99, 3],
-        [99],
+    expected_chunks = [
+        BasicTokenizer._merge_token_pairs(chunk, (1, 2), 99)
+        for chunk in original_token_chunks
     ]
+    expected_counts = {}
+    expected_indices = {}
+    for chunk_index, chunk in enumerate(expected_chunks):
+        chunk_pair_counts = BasicTokenizer._get_token_pair_counts(chunk)
+        for token_pair, count in chunk_pair_counts.items():
+            expected_counts[token_pair] = expected_counts.get(token_pair, 0) + count
+            expected_indices.setdefault(token_pair, set()).add(chunk_index)
+
+    assert token_chunks == expected_chunks
+    assert token_pair_counts == expected_counts
+    assert pair_chunk_indices == expected_indices
 
 
-def test_merge_token_pairs_for_chunks_does_not_merge_across_chunk_boundaries():
-    # (2, 3) only occurs across the boundary between the two chunks, so it must be left alone.
+def test_merge_token_pairs_for_chunks_and_update_counts_removes_a_pair_left_with_no_occurrences():
+    # (2, 3) only occurs in chunk 0 and disappears entirely once (1, 2) is merged there.
+    token_chunks = [[1, 2, 3]]
+    token_pair_counts, pair_chunk_indices = (
+        RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(token_chunks)
+    )
+
+    RegexTokenizer._merge_token_pairs_for_chunks_and_update_counts(
+        token_chunks, (1, 2), 99, token_pair_counts, pair_chunk_indices
+    )
+
+    assert token_chunks == [[99, 3]]
+    assert token_pair_counts == {(99, 3): 1}
+    assert pair_chunk_indices == {(99, 3): {0}}
+    assert (2, 3) not in token_pair_counts
+    assert (2, 3) not in pair_chunk_indices
+
+
+def test_merge_token_pairs_for_chunks_and_update_counts_handles_overlapping_pairs_in_one_chunk():
+    # (1, 2) occurs twice back-to-back, so merging must also produce the new (99, 99) pair.
+    token_chunks = [[1, 2, 1, 2, 3]]
+    token_pair_counts, pair_chunk_indices = (
+        RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(token_chunks)
+    )
+
+    RegexTokenizer._merge_token_pairs_for_chunks_and_update_counts(
+        token_chunks, (1, 2), 99, token_pair_counts, pair_chunk_indices
+    )
+
+    assert token_chunks == [[99, 99, 3]]
+    assert token_pair_counts == {(99, 99): 1, (99, 3): 1}
+    assert pair_chunk_indices == {(99, 99): {0}, (99, 3): {0}}
+
+
+def test_merge_token_pairs_for_chunks_and_update_counts_combines_new_pair_count_across_chunks():
+    # Chunk 1 already contains (99, 3); merging chunk 0's (1, 2) into 99 must add to,
+    # not overwrite, that existing global count and chunk-index entry.
+    token_chunks = [[1, 2, 3], [99, 3]]
+    token_pair_counts, pair_chunk_indices = (
+        RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(token_chunks)
+    )
+
+    RegexTokenizer._merge_token_pairs_for_chunks_and_update_counts(
+        token_chunks, (1, 2), 99, token_pair_counts, pair_chunk_indices
+    )
+
+    assert token_chunks == [[99, 3], [99, 3]]
+    assert token_pair_counts == {(99, 3): 2}
+    assert pair_chunk_indices == {(99, 3): {0, 1}}
+
+
+def test_merge_token_pairs_for_chunks_and_update_counts_skips_chunks_without_the_pair():
+    # Only chunk 0 contains (1, 2) - chunk 1 must be left completely untouched.
     token_chunks = [[1, 2], [3, 4]]
+    token_pair_counts, pair_chunk_indices = (
+        RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(token_chunks)
+    )
 
-    assert RegexTokenizer._merge_token_pairs_for_chunks(token_chunks, (2, 3), 99) == [
-        [1, 2],
-        [3, 4],
-    ]
+    RegexTokenizer._merge_token_pairs_for_chunks_and_update_counts(
+        token_chunks, (1, 2), 99, token_pair_counts, pair_chunk_indices
+    )
+
+    assert token_chunks == [[99], [3, 4]]
+    assert token_pair_counts == {(3, 4): 1}
+    assert pair_chunk_indices == {(3, 4): {1}}
 
 
-def test_merge_token_pairs_for_chunks_empty_list_returns_empty_list():
-    assert RegexTokenizer._merge_token_pairs_for_chunks([], (1, 2), 99) == []
+def test_merge_token_pairs_for_chunks_and_update_counts_respects_chunk_boundaries():
+    # (2, 3) only occurs across the boundary between the two chunks, so it was
+    # never indexed/counted and merging it must be a no-op.
+    token_chunks = [[1, 2], [3, 4]]
+    token_pair_counts, pair_chunk_indices = (
+        RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(token_chunks)
+    )
+
+    RegexTokenizer._merge_token_pairs_for_chunks_and_update_counts(
+        token_chunks, (2, 3), 99, token_pair_counts, pair_chunk_indices
+    )
+
+    assert token_chunks == [[1, 2], [3, 4]]
+    assert token_pair_counts == {(1, 2): 1, (3, 4): 1}
+
+
+def test_merge_token_pairs_for_chunks_and_update_counts_empty_list_is_a_no_op():
+    token_chunks = []
+    token_pair_counts, pair_chunk_indices = (
+        RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(token_chunks)
+    )
+
+    RegexTokenizer._merge_token_pairs_for_chunks_and_update_counts(
+        token_chunks, (1, 2), 99, token_pair_counts, pair_chunk_indices
+    )
+
+    assert token_chunks == []
+    assert token_pair_counts == {}
+
+
+def test_get_token_pair_counts_and_locations_for_chunks_records_chunk_indices_per_pair():
+    token_chunks = [[1, 2, 3], [4, 5], [1, 2]]
+
+    _, pair_chunk_indices = (
+        RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(token_chunks)
+    )
+
+    assert pair_chunk_indices == {
+        (1, 2): {0, 2},
+        (2, 3): {0},
+        (4, 5): {1},
+    }
+
+
+def test_get_token_pair_counts_and_locations_for_chunks_empty_list_returns_empty_results():
+    counts, pair_chunk_indices = (
+        RegexTokenizer._get_token_pair_counts_and_locations_for_chunks([])
+    )
+
+    assert counts == {}
+    assert pair_chunk_indices == {}

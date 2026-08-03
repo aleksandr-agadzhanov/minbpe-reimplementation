@@ -63,7 +63,7 @@ class BasicTokenizer:
         if not self.special_tokens:
             return self._encode_non_special(text)
 
-        # Longest tokens first, so one special token can't shadow another it's a prefix of.
+        # Longest tokens first, so a shorter special token can't shadow a longer one it's a prefix of.
         special_token_pattern = "|".join(
             re.escape(token)
             for token in sorted(self.special_tokens, key=len, reverse=True)
@@ -141,8 +141,7 @@ class BasicTokenizer:
         decoded_tokens = []
         for token_id in tokens:
             decoded_tokens.extend(self._expand_token(token_id))
-        # A subset of tokens (e.g. from a partial/invalid sequence) may not align to
-        # valid UTF-8 - substitute the U+FFFD replacement character instead of raising.
+        # Invalid UTF-8 (e.g. from a partial token sequence) is replaced with U+FFFD instead of raising.
         text = bytes(decoded_tokens).decode(
             BasicTokenizer.TEXT_ENCODING, errors="replace"
         )
@@ -246,24 +245,28 @@ class BasicTokenizer:
 
         # Work on a copy so `original_tokens` still reflects the starting length.
         tokens = original_tokens.copy()
+        # Count once on the full dataset, then update after each merge.
+        token_pair_counts = BasicTokenizer._get_token_pair_counts(tokens)
         encode_vocabulary = {}
         decode_vocabulary = {}
         new_token_id = BasicTokenizer.BASE_VOCABULARY_SIZE
 
         for _ in range(num_merges):
-            token_pair_counts = BasicTokenizer._get_token_pair_counts(tokens)
             try:
                 token_pair = BasicTokenizer._get_most_frequent_token_pair(
                     token_pair_counts
                 )
             except ValueError:
-                # get_most_frequent_token_pair raises when token_pair_counts is empty,
-                # i.e. fewer than 2 tokens remain to form a pair.
+                # Raised when token_pair_counts is empty, i.e. fewer than 2 tokens remain.
                 raise ValueError(
                     f"Cannot reach vocabulary_size={vocabulary_size}: ran out of token "
                     f"pairs to merge after {new_token_id - BasicTokenizer.BASE_VOCABULARY_SIZE} merge(s)"
                 ) from None
-            tokens = BasicTokenizer._merge_token_pairs(tokens, token_pair, new_token_id)
+            tokens, token_pair_counts = (
+                BasicTokenizer._merge_token_pairs_and_update_counts(
+                    tokens, token_pair, new_token_id
+                )
+            )
 
             BasicTokenizer._record_merge(
                 encode_vocabulary, decode_vocabulary, token_pair, new_token_id
@@ -313,8 +316,7 @@ class BasicTokenizer:
         num_special_tokens = len(special_tokens)
 
         if vocabulary_size <= BasicTokenizer.BASE_VOCABULARY_SIZE + num_special_tokens:
-            # 0-255 are reserved for raw token values and the rest for special
-            # tokens, so at least one merge is required to reach vocabulary_size.
+            # At least one merge is required since ids 0-255 are reserved and special tokens claim the rest.
             raise ValueError(
                 f"vocabulary_size must be greater than "
                 f"{BasicTokenizer.BASE_VOCABULARY_SIZE} + len(special_tokens) "
@@ -415,8 +417,7 @@ class BasicTokenizer:
         encode_vocabulary[token_pair] = new_token_id
         decode_vocabulary[new_token_id] = []
 
-        # A component >= BASE_VOCABULARY_SIZE is itself an earlier merge, already fully
-        # expanded to raw bytes in decode_vocabulary - splice that in so every entry stays flat.
+        # A component >= BASE_VOCABULARY_SIZE is an earlier merge - splice its expansion in to keep entries flat.
         for token_id in token_pair:
             if token_id >= BasicTokenizer.BASE_VOCABULARY_SIZE:
                 decode_vocabulary[new_token_id].extend(decode_vocabulary[token_id])
@@ -524,8 +525,7 @@ class BasicTokenizer:
         """
         token_pair_counts = {}
 
-        # Slide a window of size 2 over the tokens, stopping one early so
-        # `i + 1` never goes out of bounds.
+        # Stop one early so `i + 1` never goes out of bounds.
         for i in range(len(tokens) - 1):
             token_pair = (tokens[i], tokens[i + 1])
             # Increment the count for this pair, defaulting to 0 if unseen.
@@ -570,13 +570,10 @@ class BasicTokenizer:
         """
         output_tokens = []
 
-        # Walk the tokens, replacing every occurrence of the target pair with
-        # `merged_token_id` and copying everything else through unchanged.
+        # Replace every occurrence of the target pair with `merged_token_id`, copying everything else through.
         i = 0
         while i < len(tokens):
-            # `i < len(tokens) - 1` guards against reading `tokens[i + 1]` when
-            # `i` is the last index, which would otherwise raise an IndexError
-            # if that final token happens to equal `token_pair[0]`.
+            # Guards against reading `tokens[i + 1]` out of bounds when `i` is the last index.
             if (
                 i < len(tokens) - 1
                 and tokens[i] == token_pair[0]
@@ -591,3 +588,49 @@ class BasicTokenizer:
                 i = i + 1
 
         return output_tokens
+
+    @staticmethod
+    def _merge_token_pairs_and_update_counts(
+        tokens: list[int], token_pair: tuple[int, int], merged_token_id: int
+    ) -> tuple[list[int], dict[tuple[int, int], int]]:
+        """Merge token_pair and rebuild pair counts in the same pass.
+
+        This avoids a separate full-sequence recount after every merge.
+
+        Args:
+            tokens: A sequence of integer token ids.
+            token_pair: The adjacent pair of token ids to replace wherever it occurs.
+            merged_token_id: The token id to substitute for `token_pair`.
+
+        Returns:
+            A tuple containing the merged token sequence and the updated
+            consecutive-pair counts for that merged sequence.
+        """
+        output_tokens = []
+        updated_token_pair_counts = {}
+
+        i = 0
+        previous_output_token = None
+        while i < len(tokens):
+            # Emit exactly one output token per step: either a merged token or the current raw token.
+            if (
+                i < len(tokens) - 1
+                and tokens[i] == token_pair[0]
+                and tokens[i + 1] == token_pair[1]
+            ):
+                output_token = merged_token_id
+                i = i + 2
+            else:
+                output_token = tokens[i]
+                i = i + 1
+
+            output_tokens.append(output_token)
+            # Count adjacent pairs directly on the merged output stream to avoid a second full pass.
+            if previous_output_token is not None:
+                output_pair = (previous_output_token, output_token)
+                updated_token_pair_counts[output_pair] = (
+                    updated_token_pair_counts.get(output_pair, 0) + 1
+                )
+            previous_output_token = output_token
+
+        return output_tokens, updated_token_pair_counts
