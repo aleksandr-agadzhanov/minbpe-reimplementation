@@ -1,2 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minbpe-reimplementation"
+version = "0.1.0"
+description = "A from-scratch implementation of Byte Pair Encoding (BPE) tokenization in Python."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Aleksandr Agadzhanov" }]
+requires-python = ">=3.9"
+dependencies = ["regex>=2024.1.1"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "tiktoken>=0.7.0"]
+
+[project.urls]
+Repository = "https://github.com/aleksandr-agadzhanov/minbpe-reimplementation"
+
+[tool.setuptools]
+packages = ["tokenizers"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
