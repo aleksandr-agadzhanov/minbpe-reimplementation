@@ -100,9 +100,7 @@ class RegexTokenizer(BasicTokenizer):
         # Count once across all chunks, and track which chunks contain each pair so
         # later merges only rescan the chunks that could actually contain them.
         token_pair_counts, pair_chunk_indices = (
-            RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(
-                token_chunks
-            )
+            RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(token_chunks)
         )
         encode_vocabulary = {}
         decode_vocabulary = {}

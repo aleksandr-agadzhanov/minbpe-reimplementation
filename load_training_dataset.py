@@ -4,8 +4,8 @@ dataset = load_dataset(
     "HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True
 )
 
-target_size = 100_000_0
-training_dataset_path = "training_datasets/fineweb_edu_1mb.txt"
+target_size = 100_000_000
+training_dataset_path = "training_datasets/fineweb_edu_100mb.txt"
 
 current_size = 0
 

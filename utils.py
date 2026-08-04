@@ -24,5 +24,7 @@ def print_vocabulary(vocabulary_file_name: str, num_tokens: int) -> None:
     sorted_tokens = sorted(decode_vocabulary.values(), key=len, reverse=True)
     for rank, tokens in enumerate(sorted_tokens[:num_tokens], start=1):
         # A merged token can be a partial UTF-8 sequence, so decoding may fail - replace instead of crashing.
-        characters = bytes(tokens).decode(BasicTokenizer.TEXT_ENCODING, errors="replace")
+        characters = bytes(tokens).decode(
+            BasicTokenizer.TEXT_ENCODING, errors="replace"
+        )
         print(f"{rank}. {characters}")

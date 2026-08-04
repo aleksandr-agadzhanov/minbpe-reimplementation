@@ -213,8 +213,8 @@ def test_get_token_pair_counts_and_locations_for_chunks_counts_within_each_chunk
     token_chunks = [[1, 2, 3], [4, 5]]
 
     # (3, 4) would only occur if the chunk boundary were ignored - it must not be counted.
-    token_pair_counts, _ = RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(
-        token_chunks
+    token_pair_counts, _ = (
+        RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(token_chunks)
     )
 
     assert token_pair_counts == {
@@ -227,8 +227,8 @@ def test_get_token_pair_counts_and_locations_for_chunks_counts_within_each_chunk
 def test_get_token_pair_counts_and_locations_for_chunks_sums_counts_across_chunks():
     token_chunks = [[1, 2], [1, 2], [1, 2]]
 
-    token_pair_counts, _ = RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(
-        token_chunks
+    token_pair_counts, _ = (
+        RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(token_chunks)
     )
 
     assert token_pair_counts == {(1, 2): 3}
@@ -237,16 +237,16 @@ def test_get_token_pair_counts_and_locations_for_chunks_sums_counts_across_chunk
 def test_get_token_pair_counts_and_locations_for_chunks_ignores_chunks_with_fewer_than_two_tokens():
     token_chunks = [[1], [2, 3], []]
 
-    token_pair_counts, _ = RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(
-        token_chunks
+    token_pair_counts, _ = (
+        RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(token_chunks)
     )
 
     assert token_pair_counts == {(2, 3): 1}
 
 
 def test_get_token_pair_counts_and_locations_for_chunks_empty_list_returns_empty_dict():
-    token_pair_counts, _ = RegexTokenizer._get_token_pair_counts_and_locations_for_chunks(
-        []
+    token_pair_counts, _ = (
+        RegexTokenizer._get_token_pair_counts_and_locations_for_chunks([])
     )
 
     assert token_pair_counts == {}
