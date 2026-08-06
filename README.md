@@ -2,7 +2,8 @@
 
 A from-scratch implementation of Byte Pair Encoding (BPE) tokenization in
 Python, following Andrej Karpathy's ["Let's build the GPT Tokenizer"](https://www.youtube.com/watch?v=zduSFxRajkE)
-YouTube tutorial. Includes training a tokenizer on raw text, encoding/decoding,
+YouTube tutorial and using his reference repository [karpathy/minbpe](https://github.com/karpathy/minbpe)
+as a guide. Includes training a tokenizer on raw text, encoding/decoding,
 and a full unit test suite for the core BPE logic.
 
 The core BPE algorithm (`BasicTokenizer`, `RegexTokenizer`, and the training
