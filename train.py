@@ -1,23 +1,23 @@
 from tokenizers.regex_tokenizer import RegexTokenizer
 
-input_file_name = "fineweb_edu_100mb.txt"
-num_base_tokens = 256
-num_merged_tokens = 16384 - 256
-special_tokens = {
+INPUT_FILE_NAME = "fineweb_edu_100mb.txt"
+NUM_BASE_TOKENS = 256
+NUM_MERGED_TOKENS = 16384 - 256
+SPECIAL_TOKENS = {
     "<|endoftext|>": 16385,
     "<|fim_prefix|>": 16386,
     "<|fim_middle|>": 16387,
     "<|fim_suffix|>": 16388,
     "<|endofprompt|>": 16389,
 }
+VOCABULARY_FILE_NAME = "fineweb_edu_100mb_16389.pkl"
 
-vocabulary_size = num_base_tokens + num_merged_tokens + len(special_tokens)
-vocabulary_file_name = "fineweb_edu_100mb_16389.pkl"
+vocabulary_size = NUM_BASE_TOKENS + NUM_MERGED_TOKENS + len(SPECIAL_TOKENS)
 
 RegexTokenizer.train(
-    input_file_name,
+    INPUT_FILE_NAME,
     vocabulary_size,
-    vocabulary_file_name,
+    VOCABULARY_FILE_NAME,
     verbose=True,
-    special_tokens=special_tokens,
+    special_tokens=SPECIAL_TOKENS,
 )
