@@ -8,6 +8,15 @@ from tokenizers.basic_tokenizer import BasicTokenizer
 
 
 class RegexTokenizer(BasicTokenizer):
+    """A `BasicTokenizer` that first splits text into chunks with `SPLIT_PATTERN` before merging.
+
+    Splitting text into chunks (e.g. separating letters, numbers, and
+    punctuation) before applying BPE stops a merge from ever spanning two
+    chunks, so a learned merge can't join across what would otherwise be a
+    word or category boundary. Training and encoding both apply merges
+    within each chunk independently, then concatenate the results.
+    """
+
     SPLIT_PATTERN = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
 
     def _encode_non_special(self, text: str) -> list[int]:

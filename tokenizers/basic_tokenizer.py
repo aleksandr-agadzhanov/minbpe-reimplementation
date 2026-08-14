@@ -7,6 +7,13 @@ from pathlib import Path
 
 
 class BasicTokenizer:
+    """A byte-level BPE tokenizer trained by iteratively merging the most frequent adjacent token pair.
+
+    Merges are learned directly over the raw byte stream of the input text,
+    with no pre-tokenization step. A trained vocabulary is loaded from, and
+    saved to, the `vocabularies/` directory via `__init__` and `train`.
+    """
+
     # Ids 0-255 are reserved for raw byte values; learned merges start at this id.
     BASE_VOCABULARY_SIZE = 256
     VOCABULARIES_DIRECTORY_NAME = "vocabularies"
