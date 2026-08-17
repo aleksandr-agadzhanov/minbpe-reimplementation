@@ -1,7 +1,7 @@
 import pickle
 from pathlib import Path
 
-from tokenizers.basic_tokenizer import BasicTokenizer
+from minbpe_tokenizers.basic_tokenizer import BasicTokenizer
 
 
 def print_vocabulary(vocabulary_file_name: str, num_tokens: int) -> None:

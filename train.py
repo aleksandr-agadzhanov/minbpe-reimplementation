@@ -1,4 +1,4 @@
-from tokenizers.regex_tokenizer import RegexTokenizer
+from minbpe_tokenizers.regex_tokenizer import RegexTokenizer
 
 INPUT_FILE_NAME = "fineweb_edu_100mb.txt"
 NUM_BASE_TOKENS = 256
