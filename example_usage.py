@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from tokenizers import RegexTokenizer
+from minbpe_tokenizers import RegexTokenizer
 
 INPUT_FILE_NAME = "fineweb_edu_1mb.txt"
 VOCABULARY_FILE_NAME = "example_usage.pkl"

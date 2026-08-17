@@ -2,8 +2,8 @@ from collections import Counter
 
 import tiktoken
 
-from tokenizers.basic_tokenizer import BasicTokenizer
-from tokenizers.regex_tokenizer import RegexTokenizer
+from minbpe_tokenizers.basic_tokenizer import BasicTokenizer
+from minbpe_tokenizers.regex_tokenizer import RegexTokenizer
 
 VOCABULARY_FILE_NAME = "fineweb_edu_100mb_16389.pkl"
 TIKTOKEN_ENCODING_NAME = "cl100k_base"

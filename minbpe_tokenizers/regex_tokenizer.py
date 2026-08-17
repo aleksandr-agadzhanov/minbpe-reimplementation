@@ -4,7 +4,7 @@ import time
 
 import regex as re
 
-from tokenizers.basic_tokenizer import BasicTokenizer
+from minbpe_tokenizers.basic_tokenizer import BasicTokenizer
 
 
 class RegexTokenizer(BasicTokenizer):

@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from tokenizers.basic_tokenizer import BasicTokenizer
-from tokenizers.regex_tokenizer import RegexTokenizer
+from minbpe_tokenizers.basic_tokenizer import BasicTokenizer
+from minbpe_tokenizers.regex_tokenizer import RegexTokenizer
 
 # GPT4Tokenizer resolves vocabularies/inputs relative to its own module file,
 # so tests that need real files on disk must use these same directories.
