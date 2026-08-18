@@ -19,7 +19,7 @@ class RegexTokenizer(BasicTokenizer):
 
     SPLIT_PATTERN = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
 
-    def _encode_non_special(self, text: str) -> list[int]:
+    def encode_non_special(self, text: str) -> list[int]:
         """Encode text containing no special tokens into a list of token ids.
 
         The text is first split into chunks using `SPLIT_PATTERN`, and each
@@ -39,7 +39,7 @@ class RegexTokenizer(BasicTokenizer):
         tokens = []
         for text_chunk in text_chunks:
             # super()._encode_non_special() applies BasicTokenizer's merge loop to a single chunk at a time.
-            tokens.extend(super()._encode_non_special(text_chunk))
+            tokens.extend(super().encode_non_special(text_chunk))
 
         return tokens
 

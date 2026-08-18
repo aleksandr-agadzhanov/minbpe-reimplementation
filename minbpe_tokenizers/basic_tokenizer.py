@@ -68,7 +68,7 @@ class BasicTokenizer:
             A list of token ids representing the encoded text.
         """
         if not self.special_tokens:
-            return self._encode_non_special(text)
+            return self.encode_non_special(text)
 
         # Longest tokens first, so a shorter special token can't shadow a longer one it's a prefix of.
         special_token_pattern = "|".join(
@@ -83,11 +83,11 @@ class BasicTokenizer:
             if segment in self.special_tokens:
                 tokens.append(self.special_tokens[segment])
             elif segment:
-                tokens.extend(self._encode_non_special(segment))
+                tokens.extend(self.encode_non_special(segment))
 
         return tokens
 
-    def _encode_non_special(self, text: str) -> list[int]:
+    def encode_non_special(self, text: str) -> list[int]:
         """Encode text containing no special tokens into a list of token ids.
 
         Repeatedly applies the highest-priority (earliest learned) merge found
