@@ -29,8 +29,8 @@ of rescanning the whole corpus after every merge).
 
 A `RegexTokenizer` vocabulary was trained on 100 MB of text from the
 [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu)
-dataset, producing a vocabulary of 16,389 tokens: 256 base byte tokens,
-16,128 learned merges, and 5 special tokens. In this setup, the full
+dataset, producing a vocabulary of 16,384 tokens: 256 base byte tokens,
+16,127 learned merges, and 1 special token. In this setup, the full
 training run completed in under 15 minutes.
 
 `compare_with_tiktoken.py` compares this tokenizer's output against OpenAI's
